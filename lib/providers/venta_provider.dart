@@ -1,162 +1,132 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart'; // Necesario para 'Value'
 import '../models/models.dart';
-import '../services/database.dart';
+// ALIAS CRÍTICO: 'db' para diferenciar la base de datos de tus modelos
+import '../services/database.dart' as db;
 import 'auth_provider.dart';
+import 'producto_provider.dart'; // Para recargar el stock después de vender
 
-// Provider de ventas
+// 1. Provider de la Base de Datos (Reutilizable)
+final databaseProvider = Provider<db.AppDatabase>((ref) {
+  return db.AppDatabase();
+});
+
+// 2. Provider para ver el Historial de Ventas
 final ventasProvider = FutureProvider<List<Venta>>((ref) async {
-  final db = ref.watch(databaseProvider);
-  return db.getAllVentas();
+  final database = ref.watch(databaseProvider);
+  
+  // Usamos getAllVentas del archivo database.dart
+  final ventasData = await database.getAllVentas();
+  
+  // Convertimos los datos de Drift a tu Modelo Venta
+  return ventasData.map((v) => Venta(
+    id: v.id,
+    total: v.total,
+    fecha: v.fecha,
+    usuarioId: v.usuarioId,
+    // Nota: Por ahora dejamos la lista de items vacía en la vista general 
+    // para no hacer consultas pesadas innecesarias.
+    items: [], 
+  )).toList();
 });
 
-// Provider de ventas por mes
-final ventasByMesProvider = FutureProvider.family<List<Venta>, DateTime>((ref, mes) async {
-  final db = ref.watch(databaseProvider);
-  return db.getVentasByMes(mes);
-});
+// 3. Notifier del CARRITO (Maneja la lista temporal antes de vender)
+class CarritoNotifier extends StateNotifier<List<VentaItem>> {
+  CarritoNotifier() : super([]);
 
-// Notifier para carrito de ventas
-class CarritoVentaNotifier extends StateNotifier<List<VentaItem>> {
-  CarritoVentaNotifier() : super([]);
+  void agregarItem(Producto producto, int cantidad, double precioAplicado) {
+    // Buscamos si el producto ya está en el carrito
+    final index = state.indexWhere((item) => item.productoId == producto.id);
 
-  void agregarItem({
-    required Producto producto,
-    required int cantidad,
-    required TipoPrecio tipoPrecio,
-  }) {
-    final precio = tipoPrecio == TipoPrecio.mayorista 
-        ? producto.precioMayorista 
-        : producto.precioMinorista;
-    
-    final itemExistente = state.indexWhere(
-      (i) => i.productoId == producto.id && i.tipoPrecio == tipoPrecio
-    );
-    
-    if (itemExistente >= 0) {
-      // Actualizar cantidad si ya existe
-      final item = state[itemExistente];
-      final nuevaCantidad = item.cantidad + cantidad;
-      final nuevoSubtotal = nuevaCantidad * precio;
+    if (index >= 0) {
+      // Si ya existe, sumamos la cantidad
+      final itemExistente = state[index];
+      final nuevaCantidad = itemExistente.cantidad + cantidad;
       
-      state = [
-        ...state.sublist(0, itemExistente),
-        item.copyWith(
-          cantidad: nuevaCantidad,
-          subtotal: nuevoSubtotal,
-        ),
-        ...state.sublist(itemExistente + 1),
-      ];
+      final itemsActualizados = [...state];
+      itemsActualizados[index] = VentaItem(
+        productoId: producto.id,
+        nombreProducto: producto.nombre,
+        cantidad: nuevaCantidad,
+        precioUnitario: precioAplicado,
+        subtotal: nuevaCantidad * precioAplicado,
+      );
+      state = itemsActualizados;
     } else {
-      // Agregar nuevo item
+      // Si es nuevo, lo agregamos
       state = [
         ...state,
         VentaItem(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
           productoId: producto.id,
           nombreProducto: producto.nombre,
           cantidad: cantidad,
-          precioUnitario: precio,
-          tipoPrecio: tipoPrecio,
-          subtotal: cantidad * precio,
+          precioUnitario: precioAplicado,
+          subtotal: cantidad * precioAplicado,
         ),
       ];
     }
   }
 
-  void actualizarCantidad(String itemId, int nuevaCantidad) {
-    final index = state.indexWhere((i) => i.id == itemId);
-    if (index >= 0) {
-      final item = state[index];
-      state = [
-        ...state.sublist(0, index),
-        item.copyWith(
-          cantidad: nuevaCantidad,
-          subtotal: nuevaCantidad * item.precioUnitario,
-        ),
-        ...state.sublist(index + 1),
-      ];
-    }
+  void quitarItem(int productoId) {
+    state = state.where((item) => item.productoId != productoId).toList();
   }
 
-  void eliminarItem(String itemId) {
-    state = state.where((i) => i.id != itemId).toList();
-  }
-
-  void limpiar() {
+  void limpiarCarrito() {
     state = [];
   }
-
-  double get subtotal => state.fold(0, (sum, item) => sum + item.subtotal);
-  int get totalItems => state.fold(0, (sum, item) => sum + item.cantidad);
+  
+  double get total => state.fold(0, (sum, item) => sum + item.subtotal);
 }
 
-final carritoVentaProvider = StateNotifierProvider<CarritoVentaNotifier, List<VentaItem>>((ref) {
-  return CarritoVentaNotifier();
+final carritoProvider = StateNotifierProvider<CarritoNotifier, List<VentaItem>>((ref) {
+  return CarritoNotifier();
 });
 
-// Provider para descuento
-final descuentoVentaProvider = StateProvider<double>((ref) => 0);
-
-// Notifier para operaciones de ventas
-class VentaNotifier extends StateNotifier<AsyncValue<void>> {
-  final AppDatabase _db;
+// 4. Notifier para CONFIRMAR la Venta (La acción de guardar)
+class VentaActionNotifier extends StateNotifier<AsyncValue<void>> {
+  final db.AppDatabase _db;
   final Ref _ref;
 
-  VentaNotifier(this._db, this._ref) : super(const AsyncValue.data(null));
+  VentaActionNotifier(this._db, this._ref) : super(const AsyncValue.data(null));
 
-  Future<void> registrarVenta({
-    required List<VentaItem> items,
-    required double subtotal,
-    required double descuento,
-    required double total,
-    String? cliente,
-    String? notas,
-  }) async {
+  Future<void> confirmarVenta() async {
     state = const AsyncValue.loading();
     
     try {
-      final auth = _ref.read(authProvider);
-      final vendedorId = auth.usuario?.id ?? '1';
-      final nombreVendedor = auth.usuario?.nombre ?? 'Sistema';
+      // Obtenemos los datos necesarios de otros providers
+      final items = _ref.read(carritoProvider);
+      final authState = _ref.read(authProvider); // Asumimos que authProvider expone el estado
+      final usuario = authState.usuario; // Ajusta esto según cómo expongas el usuario
       
-      final ventaCompanion = VentasCompanion(
-        subtotal: Value(subtotal),
-        descuento: Value(descuento),
-        total: Value(total),
-        cliente: cliente != null ? Value(cliente) : const Value.absent(),
-        notas: notas != null ? Value(notas) : const Value.absent(),
-        vendedorId: Value(vendedorId),
-        nombreVendedor: Value(nombreVendedor),
+      if (items.isEmpty) throw Exception("El carrito está vacío");
+      // Si no hay usuario logueado, usamos ID 1 por defecto para evitar crash
+      final usuarioId = usuario?.id ?? 1; 
+
+      final totalVenta = items.fold(0.0, (sum, item) => sum + item.subtotal);
+
+      // A) Preparamos la cabecera de la venta (VentasCompanion)
+      final ventaCompanion = db.VentasCompanion(
+        total: Value(totalVenta),
+        fecha: Value(DateTime.now()),
+        usuarioId: Value(usuarioId),
       );
-      
-      final itemsCompanion = items.map((item) => VentaItemsCompanion(
-        productoId: Value(item.productoId),
-        nombreProducto: Value(item.nombreProducto),
-        cantidad: Value(item.cantidad),
-        precioUnitario: Value(item.precioUnitario),
-        tipoPrecio: Value(item.tipoPrecio == TipoPrecio.mayorista ? 'mayorista' : 'minorista'),
-        subtotal: Value(item.subtotal),
-      )).toList();
-      
-      await _db.insertVenta(ventaCompanion, itemsCompanion);
-      
-      _ref.invalidate(ventasProvider);
-      _ref.invalidate(ventasByMesProvider(DateTime.now()));
-      _ref.invalidate(metricasProvider);
-      state = const AsyncValue.data(null);
-    } catch (e, st) {
-      state = AsyncValue.error(e, st);
-    }
-  }
 
-  Future<void> eliminarVenta(String id) async {
-    state = const AsyncValue.loading();
-    
-    try {
-      await _db.deleteVenta(id);
-      _ref.invalidate(ventasProvider);
-      _ref.invalidate(metricasProvider);
+      // B) Preparamos los items (Lista de VentaItemsCompanion)
+      final itemsCompanion = items.map((item) => db.VentaItemsCompanion(
+        productoId: Value(item.productoId),
+        cantidad: Value(item.cantidad),
+        precioAplicado: Value(item.precioUnitario),
+        // El ventaId se asigna automático dentro de la transacción en database.dart
+      )).toList();
+
+      // C) ¡GUARDAMOS! Llamamos a la transacción que creamos en el Paso 1
+      await _db.insertVenta(ventaCompanion, itemsCompanion);
+
+      // D) Limpieza y Actualización
+      _ref.read(carritoProvider.notifier).limpiarCarrito();
+      _ref.invalidate(ventasProvider);     // Refrescar historial ventas
+      _ref.invalidate(productosProvider);  // CRÍTICO: Refrescar stock de productos
+      
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
@@ -164,7 +134,7 @@ class VentaNotifier extends StateNotifier<AsyncValue<void>> {
   }
 }
 
-final ventaNotifierProvider = StateNotifierProvider<VentaNotifier, AsyncValue<void>>((ref) {
-  final db = ref.watch(databaseProvider);
-  return VentaNotifier(db, ref);
+final ventaActionProvider = StateNotifierProvider<VentaActionNotifier, AsyncValue<void>>((ref) {
+  final database = ref.watch(databaseProvider);
+  return VentaActionNotifier(database, ref);
 });
