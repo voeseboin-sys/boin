@@ -24,16 +24,17 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.example.gestion_fabrica"
-    compileSdkVersion flutter.compileSdkVersion
+    // CAMBIO 1: Forzamos la versión 35 que pide sqlite3_flutter_libs
+    compileSdkVersion 35 
     ndkVersion flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '17'
     }
 
     sourceSets {
@@ -42,14 +43,17 @@ android {
 
     defaultConfig {
         applicationId "com.example.gestion_fabrica"
+        // CAMBIO 2: minSdkVersion en 21 es correcto para Drift
         minSdkVersion 21
-        targetSdkVersion flutter.targetSdkVersion
+        // CAMBIO 3: targetSdkVersion a 35 para compatibilidad total
+        targetSdkVersion 35
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
     }
 
     buildTypes {
         release {
+            // Usamos debug signing temporalmente para que GitHub Actions no falle por falta de llaves
             signingConfig signingConfigs.debug
             minifyEnabled true
             shrinkResources true
@@ -63,5 +67,6 @@ flutter {
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+    // CAMBIO 4: Actualizamos la librería de Kotlin
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
 }
