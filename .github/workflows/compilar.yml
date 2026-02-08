@@ -3,15 +3,12 @@ name: Generar APK Fabrica
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: # Permite forzar la compilación con un botón
+  workflow_dispatch: 
 
 jobs:
   build:
-  
-  - name: 🔑 Dar permisos al ejecutable de Gradle
-        run: chmod +x android/gradlew
-      - name: 🔨 Compilar APK (Release)
-        run: flutter build apk --release
+    name: Compilar Android
+    runs-on: ubuntu-latest
 
     steps:
       - name: 📥 Descargar Código
@@ -27,14 +24,16 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          flutter-version: '3.19.0' # Versión estable recomendada
+          flutter-version: '3.19.0'
 
       - name: 📦 Descargar Librerías
         run: flutter pub get
 
-      # ESTE PASO ES CRÍTICO: Genera el código de la base de datos
       - name: 🏗️ Generar Archivos (Drift/Riverpod)
         run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: 🔑 Dar permisos al ejecutable de Gradle
+        run: chmod +x android/gradlew
 
       - name: 🔨 Compilar APK (Release)
         run: flutter build apk --release
