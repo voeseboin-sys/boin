@@ -1,130 +1,80 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart';
 import '../models/models.dart';
-import '../services/database.dart';
+// ALIAS IMPORTANTE: 'db' para evitar confusión con el modelo Gasto
+import '../services/database.dart' as db;
+import 'producto_provider.dart'; // Para reutilizar el databaseProvider
 
-// Provider de gastos
+// Provider de Lista de Gastos
 final gastosProvider = FutureProvider<List<Gasto>>((ref) async {
-  final db = ref.watch(databaseProvider);
-  final gastosData = await db.getAllGastos();
+  final database = ref.watch(databaseProvider);
+  final datosBD = await database.getAllGastos();
   
-  return gastosData.map((g) => Gasto(
+  // Mapeo: Base de Datos -> Modelo UI
+  return datosBD.map((g) => Gasto(
     id: g.id,
     descripcion: g.descripcion,
     monto: g.monto,
+    // Convertimos el String de la BD al Enum de la App
     tipo: g.tipo == 'fabrica' ? TipoGasto.fabrica : TipoGasto.personal,
-    categoria: g.categoria,
     fecha: g.fecha,
-    mesAfectado: g.mesAfectado,
-    comprobante: g.comprobante,
-    notas: g.notas,
-    createdAt: g.createdAt,
   )).toList();
 });
 
-// Provider de gastos por mes
+// Provider de Gastos Filtrados por Mes (Para el Dashboard)
 final gastosByMesProvider = FutureProvider.family<List<Gasto>, DateTime>((ref, mes) async {
-  final db = ref.watch(databaseProvider);
-  final gastosData = await db.getGastosByMes(mes);
+  final database = ref.watch(databaseProvider);
+  // Usamos el método getGastosByMes que añadimos a database.dart
+  final datosBD = await database.getGastosByMes(mes);
   
-  return gastosData.map((g) => Gasto(
+  return datosBD.map((g) => Gasto(
     id: g.id,
     descripcion: g.descripcion,
     monto: g.monto,
     tipo: g.tipo == 'fabrica' ? TipoGasto.fabrica : TipoGasto.personal,
-    categoria: g.categoria,
     fecha: g.fecha,
-    mesAfectado: g.mesAfectado,
-    comprobante: g.comprobante,
-    notas: g.notas,
-    createdAt: g.createdAt,
   )).toList();
 });
 
-// Provider de gastos de fábrica por mes
-final gastosFabricaByMesProvider = FutureProvider.family<List<Gasto>, DateTime>((ref, mes) async {
-  final db = ref.watch(databaseProvider);
-  final gastosData = await db.getGastosByMes(mes, tipo: TipoGasto.fabrica);
-  
-  return gastosData.map((g) => Gasto(
-    id: g.id,
-    descripcion: g.descripcion,
-    monto: g.monto,
-    tipo: TipoGasto.fabrica,
-    categoria: g.categoria,
-    fecha: g.fecha,
-    mesAfectado: g.mesAfectado,
-    comprobante: g.comprobante,
-    notas: g.notas,
-    createdAt: g.createdAt,
-  )).toList();
-});
-
-// Provider de gastos personales por mes
-final gastosPersonalesByMesProvider = FutureProvider.family<List<Gasto>, DateTime>((ref, mes) async {
-  final db = ref.watch(databaseProvider);
-  final gastosData = await db.getGastosByMes(mes, tipo: TipoGasto.personal);
-  
-  return gastosData.map((g) => Gasto(
-    id: g.id,
-    descripcion: g.descripcion,
-    monto: g.monto,
-    tipo: TipoGasto.personal,
-    categoria: g.categoria,
-    fecha: g.fecha,
-    mesAfectado: g.mesAfectado,
-    comprobante: g.comprobante,
-    notas: g.notas,
-    createdAt: g.createdAt,
-  )).toList();
-});
-
-// Notifier para operaciones de gastos
+// Notifier para Acciones (Crear, Borrar)
 class GastoNotifier extends StateNotifier<AsyncValue<void>> {
-  final AppDatabase _db;
+  final db.AppDatabase _db;
   final Ref _ref;
 
   GastoNotifier(this._db, this._ref) : super(const AsyncValue.data(null));
 
-  Future<void> registrarGasto({
+  Future<void> agregarGasto({
     required String descripcion,
     required double monto,
     required TipoGasto tipo,
-    required String categoria,
-    DateTime? mesAfectado,
-    String? comprobante,
-    String? notas,
+    required DateTime fecha,
   }) async {
     state = const AsyncValue.loading();
-    
     try {
-      final now = DateTime.now();
-      await _db.insertGasto(GastosCompanion(
+      await _db.insertGasto(db.GastosCompanion(
         descripcion: Value(descripcion),
         monto: Value(monto),
+        // Guardamos como texto simple en la base de datos
         tipo: Value(tipo == TipoGasto.fabrica ? 'fabrica' : 'personal'),
-        categoria: Value(categoria),
-        mesAfectado: Value(mesAfectado ?? DateTime(now.year, now.month)),
-        comprobante: comprobante != null ? Value(comprobante) : const Value.absent(),
-        notas: notas != null ? Value(notas) : const Value.absent(),
+        fecha: Value(fecha),
       ));
       
       _ref.invalidate(gastosProvider);
-      _ref.invalidate(gastosByMesProvider(DateTime.now()));
-      _ref.invalidate(metricasProvider);
+      // También invalidamos el filtro por mes para que el gráfico se actualice
+      _ref.invalidate(gastosByMesProvider(fecha)); 
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
   }
 
-  Future<void> eliminarGasto(String id) async {
+  Future<void> eliminarGasto(int id) async {
     state = const AsyncValue.loading();
-    
     try {
       await _db.deleteGasto(id);
       _ref.invalidate(gastosProvider);
-      _ref.invalidate(metricasProvider);
+      // Invalidamos el provider de mes actual por si acaso
+      _ref.invalidate(gastosByMesProvider(DateTime.now()));
       state = const AsyncValue.data(null);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
@@ -133,6 +83,6 @@ class GastoNotifier extends StateNotifier<AsyncValue<void>> {
 }
 
 final gastoNotifierProvider = StateNotifierProvider<GastoNotifier, AsyncValue<void>>((ref) {
-  final db = ref.watch(databaseProvider);
-  return GastoNotifier(db, ref);
+  final database = ref.watch(databaseProvider);
+  return GastoNotifier(database, ref);
 });
