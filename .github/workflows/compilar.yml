@@ -19,6 +19,7 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
+          cache: 'gradle' # Esto acelera las próximas compilaciones
 
       - name: 🐦 Instalar Flutter
         uses: subosito/flutter-action@v2
@@ -32,11 +33,10 @@ jobs:
       - name: 🏗️ Generar Archivos (Drift/Riverpod)
         run: dart run build_runner build --delete-conflicting-outputs
 
-      - name: 🔑 Dar permisos al ejecutable de Gradle
-        run: chmod +x android/gradlew
-
+      # CAMBIO CLAVE: Usamos este comando para evitar el error de "No such file"
       - name: 🔨 Compilar APK (Release)
-        run: flutter build apk --release
+        run: flutter build apk --release --no-pub
+        working-directory: . 
 
       - name: 📤 Subir APK a GitHub
         uses: actions/upload-artifact@v4
