@@ -1,73 +1,65 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart';
 import '../models/models.dart';
-import '../services/database.dart';
-import 'auth_provider.dart';
+// ALIAS IMPORTANTE: 'db' para la base de datos
+import '../services/database.dart' as db;
 
-// Provider de productos
+// Provider de la Base de Datos
+final databaseProvider = Provider<db.AppDatabase>((ref) {
+  return db.AppDatabase();
+});
+
+// Provider de Lista de Productos
 final productosProvider = FutureProvider<List<Producto>>((ref) async {
-  final db = ref.watch(databaseProvider);
-  final productosData = await db.getAllProductos();
+  final database = ref.watch(databaseProvider);
+  final datosBD = await database.getAllProductos();
   
-  return productosData.map((p) => Producto(
+  // Convertimos de la BD (Drift) -> Modelo UI
+  return datosBD.map((p) => Producto(
     id: p.id,
     nombre: p.nombre,
-    descripcion: p.descripcion,
     precioMayorista: p.precioMayorista,
     precioMinorista: p.precioMinorista,
     stock: p.stock,
-    costoProduccion: p.costoProduccion,
-    mesFabricacion: p.mesFabricacion,
-    createdAt: p.createdAt,
-    updatedAt: p.updatedAt,
   )).toList();
 });
 
-// Provider de producto por ID
-final productoByIdProvider = FutureProvider.family<Producto?, String>((ref, id) async {
-  final db = ref.watch(databaseProvider);
-  final p = await db.getProductoById(id);
-  if (p == null) return null;
+// Provider de Producto Individual (por ID)
+final productoByIdProvider = FutureProvider.family<Producto?, int>((ref, id) async {
+  final database = ref.watch(databaseProvider);
+  final p = await database.getProductoById(id);
   
   return Producto(
     id: p.id,
     nombre: p.nombre,
-    descripcion: p.descripcion,
     precioMayorista: p.precioMayorista,
     precioMinorista: p.precioMinorista,
     stock: p.stock,
-    costoProduccion: p.costoProduccion,
-    mesFabricacion: p.mesFabricacion,
-    createdAt: p.createdAt,
-    updatedAt: p.updatedAt,
   );
 });
 
-// Notifier para operaciones de productos
+// Notifier para Acciones (Crear, Editar, Borrar)
 class ProductoNotifier extends StateNotifier<AsyncValue<void>> {
-  final AppDatabase _db;
+  final db.AppDatabase _db;
   final Ref _ref;
 
   ProductoNotifier(this._db, this._ref) : super(const AsyncValue.data(null));
 
   Future<void> crearProducto({
     required String nombre,
-    String? descripcion,
+    required double costo,
     required double precioMayorista,
     required double precioMinorista,
     required int stockInicial,
   }) async {
     state = const AsyncValue.loading();
-    
     try {
-      final now = DateTime.now();
-      await _db.insertProducto(ProductosCompanion(
+      await _db.insertProducto(db.ProductosCompanion(
         nombre: Value(nombre),
-        descripcion: descripcion != null ? Value(descripcion) : const Value.absent(),
+        costoUnitario: Value(costo),
         precioMayorista: Value(precioMayorista),
         precioMinorista: Value(precioMinorista),
         stock: Value(stockInicial),
-        mesFabricacion: Value(DateTime(now.year, now.month)),
       ));
       
       _ref.invalidate(productosProvider);
@@ -78,22 +70,20 @@ class ProductoNotifier extends StateNotifier<AsyncValue<void>> {
   }
 
   Future<void> actualizarProducto({
-    required String id,
+    required int id,
     required String nombre,
-    String? descripcion,
+    required double costo,
     required double precioMayorista,
     required double precioMinorista,
   }) async {
     state = const AsyncValue.loading();
-    
     try {
-      await _db.updateProducto(ProductosCompanion(
+      await _db.updateProducto(db.ProductosCompanion(
         id: Value(id),
         nombre: Value(nombre),
-        descripcion: descripcion != null ? Value(descripcion) : const Value.absent(),
+        costoUnitario: Value(costo),
         precioMayorista: Value(precioMayorista),
         precioMinorista: Value(precioMinorista),
-        updatedAt: Value(DateTime.now()),
       ));
       
       _ref.invalidate(productosProvider);
@@ -104,9 +94,8 @@ class ProductoNotifier extends StateNotifier<AsyncValue<void>> {
     }
   }
 
-  Future<void> eliminarProducto(String id) async {
+  Future<void> eliminarProducto(int id) async {
     state = const AsyncValue.loading();
-    
     try {
       await _db.deleteProducto(id);
       _ref.invalidate(productosProvider);
@@ -118,6 +107,6 @@ class ProductoNotifier extends StateNotifier<AsyncValue<void>> {
 }
 
 final productoNotifierProvider = StateNotifierProvider<ProductoNotifier, AsyncValue<void>>((ref) {
-  final db = ref.watch(databaseProvider);
-  return ProductoNotifier(db, ref);
+  final database = ref.watch(databaseProvider);
+  return ProductoNotifier(database, ref);
 });
