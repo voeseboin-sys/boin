@@ -7,13 +7,11 @@ on:
 
 jobs:
   build:
+  
   - name: 🔑 Dar permisos al ejecutable de Gradle
         run: chmod +x android/gradlew
-
       - name: 🔨 Compilar APK (Release)
         run: flutter build apk --release
-    name: Compilar Android
-    runs-on: ubuntu-latest
 
     steps:
       - name: 📥 Descargar Código
